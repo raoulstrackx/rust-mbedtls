@@ -174,6 +174,7 @@
 
 #if defined(__amd64__) || defined (__x86_64__)
 
+#ifdef MBEDTLS_RSA_FORCE_C_CODE
 #define MULADDC_INIT                        \
     asm(                                    \
         "xorq   %%r8, %%r8\n"
@@ -195,6 +196,25 @@
         : "b" (b)                           \
         : "rax", "rdx", "r8"                \
     );
+#else
+// Code copied from git https://github.com/ARMmbed/mbedtls.git commit 5f80040729cfbe0cf61a17cbceb64375d4b0acd3 crypto/include/mbedtls/bn_mul.h
+#define MULADDC_INIT                    \
+{                                       \
+    mbedtls_t_udbl r;                           \
+    mbedtls_mpi_uint r0, r1;
+
+#define MULADDC_CORE                    \
+    r   = *(s++) * (mbedtls_t_udbl) b;          \
+    r0  = (mbedtls_mpi_uint) r;                   \
+    r1  = (mbedtls_mpi_uint)( r >> biL );         \
+    r0 += c;  r1 += (r0 <  c);          \
+    r0 += *d; r1 += (r0 < *d);          \
+    c = r1; *(d++) = r0;
+
+#define MULADDC_STOP                    \
+}
+
+#endif
 
 #endif /* AMD64 */
 

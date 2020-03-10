@@ -407,6 +407,7 @@ pub const FEATURE_DEFINES: &'static [(&'static str, CDefine)] = &[
     ("legacy_protocols",   ("MBEDTLS_SSL_CBC_RECORD_SPLITTING",Defined)),
     ("aes_alt",            ("MBEDTLS_AES_ENCRYPT_ALT",         Defined)),
     ("aes_alt",            ("MBEDTLS_AES_DECRYPT_ALT",         Defined)),
+    ("rsa_force_c_code",   ("MBEDTLS_RSA_FORCE_C_CODE",        Defined)),
 ];
 
 pub const SUFFIX: &'static str = r#"
