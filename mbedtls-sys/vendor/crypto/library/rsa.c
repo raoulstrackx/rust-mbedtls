@@ -556,12 +556,14 @@ int mbedtls_rsa_gen_key( mbedtls_rsa_context *ctx,
      */
     MBEDTLS_MPI_CHK( mbedtls_mpi_lset( &ctx->E, exponent ) );
 
+    MBEDTLS_MPI_CHK( mbedtls_mpi_gen_prime( &ctx->P, nbits >> 1,
+                                            prime_quality, f_rng, p_rng ) );
     do
     {
+        /* Re-use the last generated prime as Q */
+        mbedtls_mpi_swap( &ctx->P, &ctx->Q );
+        
         MBEDTLS_MPI_CHK( mbedtls_mpi_gen_prime( &ctx->P, nbits >> 1,
-                                                prime_quality, f_rng, p_rng ) );
-
-        MBEDTLS_MPI_CHK( mbedtls_mpi_gen_prime( &ctx->Q, nbits >> 1,
                                                 prime_quality, f_rng, p_rng ) );
 
         /* make sure the difference between p and q is not too small (FIPS 186-4 §B.3.3 step 5.4) */
