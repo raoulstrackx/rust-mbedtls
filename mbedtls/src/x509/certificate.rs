@@ -260,6 +260,13 @@ impl LinkedCertificate {
         Ok(ext)
     }
 
+    pub fn extension<T: ExtensionParser>(&self) -> Option<T::Output> {
+        match self.extensions().as_ref().ok()?.iter().find(|ext| ext.oid == T::oid()) {
+            Some(ext) => T::parse(ext).ok(),
+            None      => None,
+        }
+    }
+
     pub fn signature(&self) -> Result<Vec<u8>> {
         Ok(x509_buf_to_vec(&self.inner.sig))
     }
@@ -669,6 +676,103 @@ impl<'a> Builder<'a> {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct CrlDistributionPoint {
+    pub name: Vec<String>,
+    pub reason: Option<String>,
+    pub issuer: Option<String>,
+}
+
+pub trait ExtensionParser {
+    type Output;
+
+    fn oid() -> ObjectIdentifier;
+    fn parse(extension: &Extension) -> ASN1Result<Self::Output>;
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct CrlDistributionPoints;
+
+impl ExtensionParser for CrlDistributionPoints {
+    type Output = Vec<CrlDistributionPoint>;
+
+    fn oid() -> ObjectIdentifier {
+        ObjectIdentifier::from_slice(&[2, 5, 29, 31])
+    }
+
+    fn parse(extension: &Extension) -> ASN1Result<Self::Output> {
+        // see https://tools.ietf.org/html/rfc5280#section-4.2.1.13
+        fn general_name_reader(reader: BERReader) -> ASN1Result<String> {
+            /*
+            GeneralName ::= CHOICE {
+                 otherName                 [0]  AnotherName,
+                 rfc822Name                [1]  IA5String,
+                 dNSName                   [2]  IA5String,
+                 x400Address               [3]  ORAddress,
+                 directoryName             [4]  Name,
+                 ediPartyName              [5]  EDIPartyName,
+                 uniformResourceIdentifier [6]  IA5String,
+                 iPAddress                 [7]  OCTET STRING,
+                 registeredID              [8]  OBJECT IDENTIFIER }
+            */
+            match reader.lookahead_tag().ok().map(|tag| tag.tag_number) {
+                Some(6) => reader.read_tagged_implicit(yasna::Tag::context(6), |reader| {
+                                reader.read_ia5_string() }),
+                _       => Err(ASN1Error::new(ASN1ErrorKind::Invalid))
+            }
+        }
+        fn general_names_reader(reader: BERReader) -> ASN1Result<Vec<String>> {
+            //GeneralNames ::= SEQUENCE SIZE (1..MAX) OF GeneralName
+            reader.collect_sequence_of(|reader| {
+                general_name_reader(reader)
+            })
+        }
+        fn distribution_name_reader(reader: BERReader) -> ASN1Result<Vec<String>> {
+            /*
+             *    DistributionPointName ::= CHOICE {
+             *      fullName                [0]     GeneralNames,
+             *      nameRelativeToCRLIssuer [1]     RelativeDistinguishedName }
+             */
+            match reader.lookahead_tag().ok().map(|tag| tag.tag_number) {
+                Some(0) => reader.read_tagged_implicit(yasna::Tag::context(0), general_names_reader)
+                                 .map_err(|_| ASN1Error::new(ASN1ErrorKind::Invalid)),
+                _       => Err(ASN1Error::new(ASN1ErrorKind::Invalid))
+            }
+        }
+        fn reason_reader(_reader: BERReader) -> Option<String> {
+            None
+        }
+        fn issuer_reader(_reader: BERReader) -> Option<String> {
+            None
+        }
+        fn distribution_point_reader(reader: BERReader) -> ASN1Result<CrlDistributionPoint> {
+            /*
+            DistributionPoint ::= SEQUENCE {
+                distributionPoint       [0]     DistributionPointName OPTIONAL,
+                reasons                 [1]     ReasonFlags OPTIONAL,
+                cRLIssuer               [2]     GeneralNames OPTIONAL }
+            */
+            reader.read_sequence(|reader| {
+                let name = reader.read_optional(|reader| {
+                    reader.read_tagged(yasna::Tag::context(0), |reader| {
+                        distribution_name_reader(reader)
+                    })
+                })?.unwrap_or(Vec::new());
+                let reason = reason_reader(reader.next());
+                let issuer = issuer_reader(reader.next());
+                Ok(CrlDistributionPoint{name, reason, issuer})
+            })
+        }
+        if extension.oid != ObjectIdentifier::from_slice(&[2, 5, 29, 31]) {
+            return Err(ASN1Error::new(ASN1ErrorKind::Invalid));
+        }
+        // CRLDistributionPoints ::= SEQUENCE SIZE (1..MAX) OF DistributionPoint
+        yasna::parse_der(&extension.value, |reader| {
+            reader.collect_sequence_of(distribution_point_reader)
+        })
+    }
+}
+
 // TODO
 // x509write_crt_set_version
 // x509write_crt_set_ns_cert_type
@@ -958,5 +1062,46 @@ cYp0bH/RcPTC0Z+ZaqSWMtfxRrk63MJQF9EXpDCdvQRcTMD9D85DJrMKn8aumq0M
             let mut chain = vec![c_leaf, c_int1, c_int2];
             LinkedCertificate::verify((&mut List::from_vec(&mut chain).unwrap()).into(), &mut c_root, None).unwrap();
         }
+    }
+
+    #[test]
+    fn crl_distribution() {
+        const INTEL_ROOT_CA: &'static str = "-----BEGIN CERTIFICATE-----
+MIIFSzCCA7OgAwIBAgIJANEHdl0yo7CUMA0GCSqGSIb3DQEBCwUAMH4xCzAJBgNV
+BAYTAlVTMQswCQYDVQQIDAJDQTEUMBIGA1UEBwwLU2FudGEgQ2xhcmExGjAYBgNV
+BAoMEUludGVsIENvcnBvcmF0aW9uMTAwLgYDVQQDDCdJbnRlbCBTR1ggQXR0ZXN0
+YXRpb24gUmVwb3J0IFNpZ25pbmcgQ0EwIBcNMTYxMTE0MTUzNzMxWhgPMjA0OTEy
+MzEyMzU5NTlaMH4xCzAJBgNVBAYTAlVTMQswCQYDVQQIDAJDQTEUMBIGA1UEBwwL
+U2FudGEgQ2xhcmExGjAYBgNVBAoMEUludGVsIENvcnBvcmF0aW9uMTAwLgYDVQQD
+DCdJbnRlbCBTR1ggQXR0ZXN0YXRpb24gUmVwb3J0IFNpZ25pbmcgQ0EwggGiMA0G
+CSqGSIb3DQEBAQUAA4IBjwAwggGKAoIBgQCfPGR+tXc8u1EtJzLA10Feu1Wg+p7e
+LmSRmeaCHbkQ1TF3Nwl3RmpqXkeGzNLd69QUnWovYyVSndEMyYc3sHecGgfinEeh
+rgBJSEdsSJ9FpaFdesjsxqzGRa20PYdnnfWcCTvFoulpbFR4VBuXnnVLVzkUvlXT
+L/TAnd8nIZk0zZkFJ7P5LtePvykkar7LcSQO85wtcQe0R1Raf/sQ6wYKaKmFgCGe
+NpEJUmg4ktal4qgIAxk+QHUxQE42sxViN5mqglB0QJdUot/o9a/V/mMeH8KvOAiQ
+byinkNndn+Bgk5sSV5DFgF0DffVqmVMblt5p3jPtImzBIH0QQrXJq39AT8cRwP5H
+afuVeLHcDsRp6hol4P+ZFIhu8mmbI1u0hH3W/0C2BuYXB5PC+5izFFh/nP0lc2Lf
+6rELO9LZdnOhpL1ExFOq9H/B8tPQ84T3Sgb4nAifDabNt/zu6MmCGo5U8lwEFtGM
+RoOaX4AS+909x00lYnmtwsDVWv9vBiJCXRsCAwEAAaOByTCBxjBgBgNVHR8EWTBX
+MFWgU6BRhk9odHRwOi8vdHJ1c3RlZHNlcnZpY2VzLmludGVsLmNvbS9jb250ZW50
+L0NSTC9TR1gvQXR0ZXN0YXRpb25SZXBvcnRTaWduaW5nQ0EuY3JsMB0GA1UdDgQW
+BBR4Q3t2pn680K9+QjfrNXw7hwFRPDAfBgNVHSMEGDAWgBR4Q3t2pn680K9+Qjfr
+NXw7hwFRPDAOBgNVHQ8BAf8EBAMCAQYwEgYDVR0TAQH/BAgwBgEB/wIBADANBgkq
+hkiG9w0BAQsFAAOCAYEAeF8tYMXICvQqeXYQITkV2oLJsp6J4JAqJabHWxYJHGir
+IEqucRiJSSx+HjIJEUVaj8E0QjEud6Y5lNmXlcjqRXaCPOqK0eGRz6hi+ripMtPZ
+sFNaBwLQVV905SDjAzDzNIDnrcnXyB4gcDFCvwDFKKgLRjOB/WAqgscDUoGq5ZVi
+zLUzTqiQPmULAQaB9c6Oti6snEFJiCQ67JLyW/E83/frzCmO5Ru6WjU4tmsmy8Ra
+Ud4APK0wZTGtfPXU7w+IBdG5Ez0kE1qzxGQaL4gINJ1zMyleDnbuS8UicjJijvqA
+152Sq049ESDz+1rRGc2NVEqh1KaGXmtXvqxXcTB+Ljy5Bw2ke0v8iGngFBPqCTVB
+3op5KBG3RjbF6RRSzwzuWfL7QErNC8WEy5yDVARzTA5+xmBc388v9Dm21HGfcC8O
+DD+gT9sSpssq0ascmvH49MOgjt1yoysLtdCtJW/9FZpoOypaHx0R+mJTLwPXVMrv
+DaVzWh5aiEx+idkSGMnX
+-----END CERTIFICATE-----\0";
+        let cert = Certificate::from_pem(&INTEL_ROOT_CA.as_bytes()).unwrap();
+        let crl_distribution_points = cert.extension::<CrlDistributionPoints>();
+        assert_eq!(crl_distribution_points, Some(vec![CrlDistributionPoint {
+            name: vec!["http://trustedservices.intel.com/content/CRL/SGX/AttestationReportSigningCA.crl".to_string()],
+            reason: None,
+            issuer: None }]));
     }
 }
