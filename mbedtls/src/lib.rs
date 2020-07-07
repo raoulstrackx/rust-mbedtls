@@ -122,7 +122,7 @@ mod alloc_prelude {
 #[cfg(all(feature="time", any(feature="custom_gmtime_r", feature="custom_time")))]
 use mbedtls_sys::types::{time_t, tm};
 
-#[cfg(any(feature = "custom_gmtime_r", feature = "custom_time"))]
+#[cfg(any(feature = "custom_gmtime_r", feature = "custom_time", feature = "chrono"))]
 extern crate chrono;
 
 #[cfg(feature="custom_gmtime_r")]

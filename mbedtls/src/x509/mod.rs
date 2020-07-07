@@ -22,6 +22,11 @@ pub use self::csr::Csr;
 #[doc(inline)]
 pub use self::profile::Profile;
 
+#[cfg(feature = "chrono")]
+use chrono::offset::{TimeZone};
+#[cfg(feature = "chrono")]
+use chrono::{Utc, DateTime};
+
 use mbedtls_sys::*;
 use mbedtls_sys::types::raw_types::c_uint;
 bitflags! {
@@ -153,5 +158,29 @@ impl Time {
         .expect("error formatting time");
         assert!(writer.idx == 14);
         writer.buf
+    }
+}
+
+#[cfg(feature = "chrono")]
+impl Into<DateTime<Utc>> for Time {
+    fn into(self) -> DateTime<Utc> {
+        Utc.ymd(self.year as i32, self.month as u32, self.day as u32)
+           .and_hms(self.hour as u32, self.minute as u32, self.second as u32)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    #[cfg(feature = "chrono")]
+    fn time() {
+        use super::Time;
+        use chrono::{DateTime, Utc};
+        use chrono::offset::TimeZone;
+
+        let time = Time::new(2020, 1, 2, 13, 37, 42).unwrap();
+        let time: DateTime::<Utc> = time.into();
+        assert_eq!(time, Utc.ymd(2020, 1, 2).and_hms(13, 37, 42));
     }
 }
