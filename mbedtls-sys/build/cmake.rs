@@ -13,6 +13,7 @@ use crate::have_feature;
 impl super::BuildConfig {
     pub fn cmake(&self) {
         let mut cmk = cmake::Config::new(&self.mbedtls_src);
+        let cmk = cmk.very_verbose(true);
         cmk.cflag(format!(
             r#"-DMBEDTLS_CONFIG_FILE="\"{}\"""#,
             self.config_h.to_str().expect("config.h UTF-8 error")
